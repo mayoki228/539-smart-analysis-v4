@@ -1,4 +1,4 @@
-import {getSaved,synchronize} from '../lib/sync.mjs';
+import {getSaved,synchronize} from './sync.mjs';
 export default async function handler(request){
   if(request.method!=='GET')return new Response('Method not allowed',{status:405});
   let data=await getSaved();let error=null;
