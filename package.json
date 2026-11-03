@@ -1,0 +1,1 @@
+{"name":"539-data-research-v4","version":"4.0.0","private":true,"type":"module","scripts":{"test":"node --test"},"dependencies":{"@netlify/blobs":"^9.0.0","@netlify/functions":"^3.0.0","cheerio":"^1.0.0"}}
