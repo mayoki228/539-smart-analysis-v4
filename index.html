@@ -38,38 +38,18 @@ function showDataIssues(issues,description=''){
  (issues.length?'<p class="warn">發現 '+issues.length+' 項問題；衝突紀錄不會自動覆蓋既有資料。</p><details><summary>查看問題</summary><div class="error">'+issues.slice(0,60).map(esc).join('\n')+'</div></details>':'<p class="status-good">目前載入資料未發現重複日期、期別或號碼格式錯誤；仍須以官方開獎公告核對真實性。</p>');
 }
 function extract(obj){let out=[];function walk(v,depth=0){if(depth>9||!v)return;if(Array.isArray(v)){for(let x of v)walk(x,depth+1);return}if(typeof v!=='object')return;let n=v.drawNumber||v.drawNumbers||v.numbers||v.openNumber||v.number||v.drawNoList;let nums=Array.isArray(n)?n:typeof n==='string'?n.match(/\d{1,2}/g):null;let date=v.lotteryDate||v.drawDate||v.date||v.openDate||v.drawTime||'';let period=v.period||v.drawTerm||v.term||v.issue||v.drawNumberStr||v.drawId||'';if(nums&&nums.length===5){let d=validDraw({date:String(date).slice(0,10),period:String(period),numbers:nums.map(Number)});if(d)out.push(d)}for(let [k,x] of Object.entries(v))if(typeof x==='object')walk(x,depth+1)}walk(obj);return out}
+async function siteCSV(){const r=await fetch('./539_history.csv',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const rows=parseCSV(await r.text());if(!rows.length)throw Error('CSV 無有效資料');const a=auditDraws(rows);if(a.issues.length)throw Error('CSV 存在 '+a.issues.length+' 項重複或衝突');return a.draws;}
 async function load(){
- $('error').textContent='';$('status').textContent='正在讀取 Pilio 同步資料…';$('refresh').disabled=true;
- try{
-  const res=await fetch('/.netlify/functions/draws',{cache:'no-store',signal:AbortSignal.timeout(25000)});
-  const obj=await res.json();
-  if(!res.ok||!obj.ok||!Array.isArray(obj.data?.draws))throw Error(obj.warning||'資料服務無法連線，HTTP '+res.status);
-  const remote=auditDraws(obj.data.draws.map(d=>({...d,source:'pilio'})));
-  const imported=readImportedCSV();
-  // A manually imported dataset wins over Pilio on the same date; never silently overwrite it.
-  const map=new Map(imported.draws.map(d=>[d.date,d]));const conflicts=[];
-  for(const d of remote.draws){
-   const prior=map.get(d.date);
-   if(prior){if(prior.numbers.join(',')!==d.numbers.join(',')||(prior.period&&d.period&&prior.period!==d.period))conflicts.push('CSV / Pilio 衝突：'+d.date+'（保留 CSV，請核對官方）');continue}
-   map.set(d.date,d);
-  }
-  const merged=auditDraws([...map.values()]);
-  all=merged.draws;
-  const issues=[...imported.issues,...remote.issues,...conflicts,...merged.issues];
-  const missingPeriods=all.filter(d=>!d.period).length;
-  if(missingPeriods)issues.push('有 '+missingPeriods+' 筆期別空白（Pilio 未提供），不會自行編造期別');
-  if(obj.stale)issues.push('Pilio 回傳舊資料：'+(obj.warning||'上次同步未完成'));
-  showDataIssues(issues,'CSV 已匯入 '+imported.draws.length+' 期；Pilio 取得 '+remote.draws.length+' 期；目前載入 '+all.length+' 期。內建示範資料與舊快取已停用。');
-  $('status').textContent='Pilio 同步：'+(obj.data.syncedAt?new Date(obj.data.syncedAt).toLocaleString('zh-TW'):'時間未知')+' · 最新日期 '+(all[0]?.date||'無資料');
-  $('error').textContent=issues.length?'資料品質有 '+issues.length+' 項待核對，請展開「開獎資料品質檢查」。':'';
-  render();if(!obj.stale&&!issues.length)v5recordSnapshot();
- }catch(e){
-  const imported=readImportedCSV();all=imported.draws;
-  showDataIssues([...imported.issues,'Pilio 同步失敗：'+e.message], '目前僅使用本機已匯入 CSV（'+all.length+' 期），未使用不可信的內建資料。');
-  $('error').textContent='線上同步失敗：'+e.message+'。';
-  $('status').textContent='同步失敗 · '+all.length+' 期 CSV 資料';render();
- }finally{$('refresh').disabled=false}
+ $('refresh').disabled=true;$('error').textContent='';$('status').textContent='正在載入網站 CSV 與 Pilio…';
+ const local=readImportedCSV(),issues=[...local.issues];let site=[],remote=[];
+ try{site=await siteCSV()}catch(e){issues.push('網站 CSV 讀取失敗：'+e.message)}
+ try{const r=await fetch('/.netlify/functions/draws',{cache:'no-store',signal:AbortSignal.timeout(25000)});const o=await r.json();if(!r.ok||!o.ok||!Array.isArray(o.data?.draws))throw Error(o.warning||'HTTP '+r.status);const a=auditDraws(o.data.draws.map(d=>({...d,source:'pilio'})));remote=a.draws;issues.push(...a.issues);if(o.stale)issues.push('Pilio 資料可能過期')}catch(e){issues.push('Pilio 同步失敗：'+e.message)}
+ const map=new Map();for(const [source,arr] of [['本機 CSV',local.draws],['網站 CSV',site],['Pilio',remote]])for(const d of arr){const old=map.get(d.date);if(old){if(old.numbers.join(',')!==d.numbers.join(',')||(old.period&&d.period&&old.period!==d.period))issues.push(source+' 與既有資料衝突：'+d.date+'（保留先載入資料）');continue}map.set(d.date,d)}
+ const merged=auditDraws([...map.values()]);all=merged.draws;issues.push(...merged.issues);const missing=all.filter(d=>!d.period).length;if(missing)issues.push(missing+' 筆期別空白');
+ showDataIssues(issues,'網站 CSV '+site.length+' 期；本機 CSV '+local.draws.length+' 期；Pilio '+remote.length+' 期；目前載入 '+all.length+' 期。');
+ $('status').textContent='網站 CSV '+site.length+' 期 · Pilio '+remote.length+' 期 · 最新日期 '+(all[0]?.date||'無資料');$('error').textContent=issues.length?'資料品質有 '+issues.length+' 項待核對，請展開檢查。':'';render();$('refresh').disabled=false;
 }
+
 function parseCSV(text){let arr=[];for(let line of text.replace(/^\uFEFF/,'').split(/\r?\n/)){let parts=line.trim().split(/[,;\t，]/).map(x=>x.trim().replace(/^"|"$/g,''));if(parts.length<7)continue;let nums=parts.slice(-5).map(Number),date=parts[0],period=parts[1];if(!/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(date))continue;let d=validDraw({date:date.replaceAll('/','-'),period,numbers:nums});if(d)arr.push(d)}return arr}
 function statsFor(draws){return Array.from({length:39},(_,i)=>{let n=i+1,count=draws.filter(d=>d.numbers.includes(n)).length,missing=draws.findIndex(d=>d.numbers.includes(n));return {n,count,missing:missing<0?draws.length:missing}})}
 function comboCounts(draws,k){let counts=new Map;for(let d of draws){function rec(start,a){if(a.length===k){let key=a.map(pad).join('-');counts.set(key,(counts.get(key)||0)+1);return}for(let i=start;i<=5-(k-a.length);i++)rec(i+1,[...a,d.numbers[i]])}rec(0,[])}return [...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,12)}
